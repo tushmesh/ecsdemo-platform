@@ -1,0 +1,504 @@
+{
+			"name": "[concat(parameters('factoryName'), '/EXECUTION_MODEL_LIVE_PIPE')]",
+			"type": "Microsoft.DataFactory/factories/pipelines",
+			"apiVersion": "2018-06-01",
+			"properties": {
+				"activities": [
+					{
+						"name": "GET_LAST_MODIFIED",
+						"type": "GetMetadata",
+						"dependsOn": [
+							{
+								"activity": "WaitFor1Hour30Mins",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"dataset": {
+								"referenceName": "LOG_DS",
+								"type": "DatasetReference",
+								"parameters": {
+									"filename": {
+										"value": "@pipeline().parameters.FILE",
+										"type": "Expression"
+									},
+									"file_system": {
+										"value": "@pipeline().parameters.SYSTEM",
+										"type": "Expression"
+									},
+									"folder_name": {
+										"value": "@pipeline().parameters.FOLDER",
+										"type": "Expression"
+									}
+								}
+							},
+							"fieldList": [
+								"lastModified"
+							],
+							"storeSettings": {
+								"type": "Settings",
+								"recursive": true
+							},
+							"formatSettings": {
+								"type": "BinaryReadSettings"
+							}
+						}
+					},
+					{
+						"name": "If Condition1",
+						"type": "IfCondition",
+						"dependsOn": [
+							{
+								"activity": "GET_LAST_MODIFIED",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"expression": {
+								"value": "@equals(substring(activity('GET_LAST_MODIFIED').output.lastModified,0,10),formatDateTime(utcnow(),'yyyy-MM-dd'))",
+								"type": "Expression"
+							},
+							"ifTrueActivities": [
+								{
+									"name": "LIVE",
+									"type": "ExecutePipeline",
+									"dependsOn": [],
+									"userProperties": [],
+									"typeProperties": {
+										"pipeline": {
+											"referenceName": "PIPE",
+											"type": "PipelineReference"
+										},
+										"waitOnCompletion": true,
+										"parameters": {}
+									}
+								},
+								{
+									"name": "ENGESTION",
+									"type": "ExecutePipeline",
+									"dependsOn": [
+										{
+											"activity": "Hello",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"pipeline": {
+											"referenceName": "PIPE",
+											"type": "PipelineReference"
+										},
+										"waitOnCompletion": true,
+										"parameters": {}
+									}
+								},
+								{
+									"name": "integrity_checks_report",
+									"type": "WebActivity",
+									"dependsOn": [
+										{
+											"activity": "LIVE",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"url": "",
+										"method": "POST",
+										"headers": {},
+										"body": {
+											"Pipeline": "Integrity Checks"
+										}
+									}
+								},
+								{
+									"name": "send_on_failure_SQL_injestion",
+									"type": "WebActivity",
+									"dependsOn": [
+										{
+											"activity": "ENGESTION",
+											"dependencyConditions": [
+												"Failed"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"url": "",
+										"method": "POST",
+										"headers": {},
+										"body": {
+											"value": "@concat('{\"DataFactoryName\":\"', pipeline().DataFactory, '\", \"PipelineName\":\"', pipeline().Pipeline, '\", \"PipelineRunId\":\"', pipeline().RunId, '\",\"TriggerTime\":\"', pipeline().TriggerTime, '\", \"error\":\"', string(activity('ENGESTION').Error.message), '\" , \"Output\": \"FAILURE\", \"country\": \"Russia\", \"Pipeline\": \"LIVE\"')",
+											"type": "Expression"
+										}
+									}
+								},
+								{
+									"name": "send_on_failure_Model_Live",
+									"type": "WebActivity",
+									"dependsOn": [
+										{
+											"activity": "LIVE",
+											"dependencyConditions": [
+												"Failed"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"url": "",
+										"method": "POST",
+										"headers": {},
+										"body": {
+											"value": "@concat('{\"DataFactoryName\":\"', pipeline().DataFactory, '\", \"PipelineName\":\"', pipeline().Pipeline, '\", \"PipelineRunId\":\"', pipeline().RunId, '\",\"TriggerTime\":\"', pipeline().TriggerTime, '\", \"error\":\"', string(activity('LIVE').Error.Message), '\" , \"Output\": \"FAILURE\", \"country\": \"\", \"Pipeline\": \"LIVE\"')",
+											"type": "Expression"
+										}
+									}
+								},
+								{
+									"name": "SuccessVar",
+									"type": "SetVariable",
+									"dependsOn": [
+										{
+											"activity": "ENGESTION",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"userProperties": [],
+									"typeProperties": {
+										"variableName": "SuccessVar",
+										"value": "\"success\""
+									}
+								}
+							]
+						}
+					},
+					{
+						"name": "List of Files in Stage 02 folder",
+						"type": "GetMetadata",
+						"dependsOn": [
+							{
+								"activity": "If Condition1",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"policy": {
+							"timeout": "7.00:00:00",
+							"retry": 0,
+							"retryIntervalInSeconds": 30,
+							"secureOutput": false,
+							"secureInput": false
+						},
+						"userProperties": [],
+						"typeProperties": {
+							"dataset": {
+								"referenceName": "FILE1",
+								"type": "DatasetReference",
+								"parameters": {
+									"folderName": {
+										"value": "@pipeline().parameters.STAGE2",
+										"type": "Expression"
+									}
+								}
+							},
+							"fieldList": [
+								"childItems"
+							],
+							"storeSettings": {
+								"type": "Settings",
+								"recursive": true
+							},
+							"formatSettings": {
+								"type": "DelimitedTextReadSettings"
+							}
+						}
+					},
+					{
+						"name": "Total Count in Stage 02 Folder",
+						"type": "Filter",
+						"dependsOn": [
+							{
+								"activity": "List of Files in Stage 02 folder",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"items": {
+								"value": "@activity('List of Files in Stage 02 folder').output.childItems",
+								"type": "Expression"
+							},
+							"condition": {
+								"value": "@endswith(item().name,'.csv')",
+								"type": "Expression"
+							}
+						}
+					},
+					{
+						"name": "Check File",
+						"type": "IfCondition",
+						"dependsOn": [
+							{
+								"activity": "Total Count in Stage 02 Folder",
+								"dependencyConditions": [
+									"Succeeded"
+								]
+							}
+						],
+						"userProperties": [],
+						"typeProperties": {
+							"expression": {
+								"value": "@equals(string(activity('Total Count in Stage 02 Folder').output.ItemsCount),'2')",
+								"type": "Expression"
+							},
+							"ifFalseActivities": [
+								{
+									"name": "Copy from Stage 01 to Stage 02",
+									"type": "Copy",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "DelimitedTextSource",
+											"storeSettings": {
+												"type": "Settings",
+												"recursive": true
+											},
+											"formatSettings": {
+												"type": "DdSettings"
+											}
+										},
+										"sink": {
+											"type": "DelimitedTextSink",
+											"storeSettings": {
+												"type": "riteSettings"
+											},
+											"formatSettings": {
+												"type": "DelimitedTextWriteSettings",
+												"quoteAllText": true,
+												"fileExtension": ".txt"
+											}
+										},
+										"enableStaging": false,
+										"translator": {
+											"type": "TabularTranslator",
+											"typeConversion": true,
+											"typeConversionSettings": {
+												"allowDataTruncation": true,
+												"treatBooleanAsNumber": false
+											}
+										}
+									},
+									"inputs": [
+										{
+											"referenceName": "FILE2",
+											"type": "DatasetReference",
+											"parameters": {
+												"folderName": {
+													"value": "@pipeline().parameters.STAGE1",
+													"type": "Expression"
+												},
+												"fileName": {
+													"value": "@pipeline().parameters.File",
+													"type": "Expression"
+												}
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "FILE1",
+											"type": "DatasetReference",
+											"parameters": {
+												"folderName": {
+													"value": "@pipeline().parameters.STAGE2",
+													"type": "Expression"
+												}
+											}
+										}
+									]
+								}
+							],
+							"ifTrueActivities": [
+								{
+									"name": "Copy from Stage 02 to Stage 03",
+									"type": "Copy",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "7.00:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "DelimitedTextSource",
+											"storeSettings": {
+												"type": "ettings",
+												"recursive": true
+											},
+											"formatSettings": {
+												"type": "Settings"
+											}
+										},
+										"sink": {
+											"type": "DelimitedTextSink",
+											"storeSettings": {
+												"type": "Settings"
+											},
+											"formatSettings": {
+												"type": "Settings",
+												"quoteAllText": true,
+												"fileExtension": ".txt"
+											}
+										},
+										"enableStaging": false,
+										"translator": {
+											"type": "TabularTranslator",
+											"typeConversion": true,
+											"typeConversionSettings": {
+												"allowDataTruncation": true,
+												"treatBooleanAsNumber": false
+											}
+										}
+									},
+									"inputs": [
+										{
+											"referenceName": "FILE2",
+											"type": "DatasetReference",
+											"parameters": {
+												"folderName": {
+													"value": "@pipeline().parameters.STAGE2",
+													"type": "Expression"
+												},
+												"fileName": {
+													"value": "@pipeline().parameters.File",
+													"type": "Expression"
+												}
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "FILE1",
+											"type": "DatasetReference",
+											"parameters": {
+												"folderName": {
+													"value": "@pipeline().parameters.STAGE3",
+													"type": "Expression"
+												}
+											}
+										}
+									]
+								}
+							]
+						}
+					},
+					{
+						"name": "WaitFor1Hour30Mins",
+						"type": "Wait",
+						"dependsOn": [],
+						"userProperties": [],
+						"typeProperties": {
+							"waitTimeInSeconds": 5400
+						}
+					}
+				],
+				"parameters": {
+					"A": {
+						"type": "string",
+						"defaultValue": "raw"
+					},
+					"B": {
+						"type": "string",
+						"defaultValue": "SYSTEM/AS/VF/"
+					},
+					"C": {
+						"type": "string",
+						"defaultValue": "Reports delivered to Azure for ru_uat.csv"
+					},
+					"STAGE1": {
+						"type": "string",
+						"defaultValue": " Refresh Trigger/STAGE 01"
+					},
+					"STAGE2": {
+						"type": "string",
+						"defaultValue": "Trigger/STAGE 02"
+					},
+					"STAGE3": {
+						"type": "string",
+						"defaultValue": "/STAGE 03"
+					},
+					"AAS_Control_File": {
+						"type": "string",
+						"defaultValue": "Control_File.csv"
+					}
+				},
+				"variables": {
+					"SuccessVar": {
+						"type": "String"
+					}
+				},
+				"annotations": []
+			},
+			"dependsOn": [
+				"[concat(variables('factoryId'), 'LOG_DS')]",
+				"[concat(variables('factoryId'), 'LE1')]",
+				"[concat(variables('factoryId'), '/pipelines/IVE_PIPE')]",
+				"[concat(variables('factoryId'), '/PE')]",
+				"[concat(variables('factoryId'), '/FILE2')]"
+			]
+		},
